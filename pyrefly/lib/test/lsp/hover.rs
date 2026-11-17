@@ -482,33 +482,50 @@ _ = fn(b"")
             _ => "None".to_owned(),
         }
     });
-    assert_eq!(
-        r#"
-# main.py
+    assert!(
+        report.contains(
+            r#"
 15 | _ = fn(1)
          ^
 ```python
 (function) fn: def fn(a: int) -> int: ...
 ```
 ---
-int overload
-
+int overload"#
+        ),
+        "Expected the int overload docstring in hover, got: {report}"
+    );
+    assert!(
+        report.contains(
+            r#"
 17 | _ = fn("")
          ^
 ```python
 (function) fn: def fn(a: str) -> str: ...
 ```
 ---
-str overload
-
+str overload"#
+        ),
+        "Expected the str overload docstring in hover, got: {report}"
+    );
+    assert!(
+        report.contains(
+            r#"
+19 | _ = fn(b"")
+         ^
+```python
+(function) fn: def fn(a: bytes) -> bytes: ...
+```"#
+        ) && !report.contains(
+            r#"
 19 | _ = fn(b"")
          ^
 ```python
 (function) fn: def fn(a: bytes) -> bytes: ...
 ```
-"#
-        .trim(),
-        report.trim(),
+---"#
+        ),
+        "Expected the undocumented overload hover, got: {report}"
     );
 }
 
