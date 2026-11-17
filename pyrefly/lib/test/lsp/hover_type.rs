@@ -679,50 +679,6 @@ Hover Result: `[T](x: type[T]) -> T`
 }
 
 #[test]
-fn hover_on_overloaded_function_shows_matching_overload_docstring() {
-    let code: &str = r#"
-from typing import overload
-@overload
-def fn(a: int)->int:
-    """int overload"""
-@overload
-def fn(a: str)->str:
-    """str overload"""
-@overload
-def fn(a: bytes)->bytes:
-    ...
-def fn(a: str|int|bytes)->str|int|bytes:
-    return a
-
-_ = fn(1)
-#   ^
-_ = fn("")
-#   ^
-_ = fn(b"")
-#   ^"#;
-
-    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
-    assert_eq!(
-        r#"
-# main.py
-15 | _ = fn(1)
-         ^
-Hover Result: `(a: int) -> int [int overload]`
-
-17 | _ = fn("")
-         ^
-Hover Result: `(a: str) -> str [str overload]`
-
-19 | _ = fn(b"")
-         ^
-Hover Result: `(a: bytes) -> bytes`
-"#
-        .trim(),
-        report.trim(),
-    );
-}
-
-#[test]
 fn kwarg_basic() {
     let code = r#"
 def foo(xyz: int) -> None: ...

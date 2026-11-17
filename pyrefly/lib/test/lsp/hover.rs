@@ -1,4 +1,4 @@
-/*
+// /*
  * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * This source code is licensed under the MIT license found in the
@@ -447,6 +447,68 @@ Foo().bar(1)
     assert!(
         report.contains("Hello."),
         "Expected implementation docstring in hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_on_overloaded_function_shows_matching_overload_docstring() {
+    let code = r#"
+from typing import overload
+
+@overload
+def fn(a: int) -> int:
+    """int overload"""
+@overload
+def fn(a: str) -> str:
+    """str overload"""
+@overload
+def fn(a: bytes) -> bytes: ...
+def fn(a: str | int | bytes) -> str | int | bytes:
+    return a
+
+_ = fn(1)
+#   ^
+_ = fn("")
+#   ^
+_ = fn(b"")
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        match get_hover(&state.transaction(), handle, position, false) {
+            Some(Hover {
+                contents: Contents::MarkupContent(markup),
+                ..
+            }) => markup.value,
+            _ => "None".to_owned(),
+        }
+    });
+    assert_eq!(
+        r#"
+# main.py
+15 | _ = fn(1)
+         ^
+```python
+(function) fn: def fn(a: int) -> int: ...
+```
+---
+int overload
+
+17 | _ = fn("")
+         ^
+```python
+(function) fn: def fn(a: str) -> str: ...
+```
+---
+str overload
+
+19 | _ = fn(b"")
+         ^
+```python
+(function) fn: def fn(a: bytes) -> bytes: ...
+```
+"#
+        .trim(),
+        report.trim(),
     );
 }
 
