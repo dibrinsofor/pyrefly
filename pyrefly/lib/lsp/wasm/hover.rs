@@ -38,6 +38,7 @@ use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::type_var::Variance;
+use pyrefly_types::types::BoundMethodType;
 use pyrefly_types::types::Type;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::display::DisplayWithCtx;
@@ -1487,6 +1488,61 @@ fn nonempty_docstring(docstring: Docstring) -> Option<Docstring> {
     docstring.has_content().then_some(docstring)
 }
 
+/// Resolve docstrings for the overloaded function calls under the cursor
+fn selected_overload_docstring(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    ast: &ModModule,
+    position: TextSize,
+) -> Option<Docstring> {
+    let (callee_range, arguments_range, on_name) =
+        callee_at_position(transaction, handle, ast, position)?;
+    if !on_name {
+        return None;
+    }
+    let overload_index = transaction
+        .get_callables_from_call(handle, arguments_range.start())?
+        .chosen_overload_index?;
+    let callee_type = transaction
+        .get_answers(handle)?
+        .get_type_trace(callee_range)?;
+    let selected_type = match callee_type {
+        Type::Overload(overload) => overload.signatures.get(overload_index)?.as_type(),
+        Type::BoundMethod(method) => match method.func {
+            BoundMethodType::Overload(overload) => {
+                overload.signatures.get(overload_index)?.as_type()
+            }
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let func_id = selected_type
+        .toplevel_func_metadata()?
+        .kind
+        .as_func_def_id()?;
+    let definition_handle = transaction.imported_handle(
+        handle,
+        func_id.qname.module_name(),
+        func_id.qname.module_path().dupe(),
+    );
+    let ast = transaction.get_ast(&definition_handle)?;
+    let function = Ast::locate_node(ast.as_ref(), func_id.qname.range().start())
+        .into_iter()
+        .find_map(|node| match node {
+            AnyNodeRef::StmtFunctionDef(function)
+                if function.name.range == func_id.qname.range() =>
+            {
+                Some(function)
+            }
+            _ => None,
+        })?;
+    let range = function_doc_ranges(function).docstring()?;
+    Some(Docstring(
+        range,
+        transaction.get_module_info(&definition_handle)?,
+    ))
+}
+
 /// Class docstring for a constructor call whose `__init__` or `__new__` has none.
 ///
 /// Eligibility comes from the callee's class type. `find_definition` with dunder
@@ -1797,8 +1853,11 @@ pub fn get_hover_with_verbosity(
         } else {
             (None, fallback_name_from_type, None, Vec::new())
         };
-    let docstring = interface_docstring
+    let docstring = ast
+        .as_deref()
+        .and_then(|ast| selected_overload_docstring(transaction, handle, ast, position))
         .and_then(nonempty_docstring)
+        .or_else(|| interface_docstring.and_then(nonempty_docstring))
         .or_else(|| fallback_docstring.and_then(nonempty_docstring))
         .or_else(|| docstring_for_class_object_type(transaction, handle, &type_));
 
