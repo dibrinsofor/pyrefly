@@ -8,6 +8,7 @@
 // @lint-ignore-every SPELL
 
 use std::cell::LazyCell;
+use std::sync::Arc;
 use std::sync::LazyLock;
 
 use dupe::Dupe;
@@ -37,8 +38,8 @@ use pyrefly_types::callable::Required;
 use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::display::LspDisplayMode;
+use pyrefly_types::function::FuncDefId;
 use pyrefly_types::type_var::Variance;
-use pyrefly_types::types::BoundMethodType;
 use pyrefly_types::types::Type;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::display::DisplayWithCtx;
@@ -1476,38 +1477,11 @@ fn nonempty_docstring(docstring: Docstring) -> Option<Docstring> {
     docstring.has_content().then_some(docstring)
 }
 
-/// Resolve docstrings for the overloaded function calls under the cursor
-fn selected_overload_docstring(
+fn docstring_for_func_def(
     transaction: &Transaction<'_>,
     handle: &Handle,
-    ast: &ModModule,
-    position: TextSize,
+    func_id: &FuncDefId,
 ) -> Option<Docstring> {
-    let (callee_range, arguments_range, on_name) =
-        callee_at_position(transaction, handle, ast, position)?;
-    if !on_name {
-        return None;
-    }
-    let overload_index = transaction
-        .get_callables_from_call(handle, arguments_range.start())?
-        .chosen_overload_index?;
-    let callee_type = transaction
-        .get_answers(handle)?
-        .get_type_trace(callee_range)?;
-    let selected_type = match callee_type {
-        Type::Overload(overload) => overload.signatures.get(overload_index)?.as_type(),
-        Type::BoundMethod(method) => match method.func {
-            BoundMethodType::Overload(overload) => {
-                overload.signatures.get(overload_index)?.as_type()
-            }
-            _ => return None,
-        },
-        _ => return None,
-    };
-    let func_id = selected_type
-        .toplevel_func_metadata()?
-        .kind
-        .as_func_def_id()?;
     let definition_handle = transaction.imported_handle(
         handle,
         func_id.qname.module_name(),
@@ -1529,6 +1503,44 @@ fn selected_overload_docstring(
         range,
         transaction.get_module_info(&definition_handle)?,
     ))
+}
+
+/// Find the source definition selected by the overload call under the cursor.
+fn selected_overload_func_def(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    ast: &ModModule,
+    position: TextSize,
+) -> Option<Arc<FuncDefId>> {
+    let (_, arguments_range, on_name) = callee_at_position(transaction, handle, ast, position)?;
+    if !on_name {
+        return None;
+    }
+    transaction
+        .get_answers(handle)?
+        .get_chosen_overload_func_def_id(arguments_range)
+}
+
+fn overload_implementation_docstring(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    ast: &ModModule,
+    position: TextSize,
+) -> Option<Docstring> {
+    let (callee_range, _, on_name) = callee_at_position(transaction, handle, ast, position)?;
+    if !on_name {
+        return None;
+    }
+    let func_id = transaction
+        .get_answers(handle)?
+        .get_type_trace(callee_range)
+        .and_then(|type_| {
+            type_
+                .toplevel_func_metadata()
+                .and_then(|metadata| metadata.kind.as_func_def_id())
+                .cloned()
+        })?;
+    docstring_for_func_def(transaction, handle, &func_id)
 }
 
 /// Class docstring for a constructor call whose `__init__` or `__new__` has none.
@@ -1841,13 +1853,25 @@ pub fn get_hover_with_verbosity(
         } else {
             (None, fallback_name_from_type, None, Vec::new())
         };
-    let docstring = ast
+    let selected_overload = ast
         .as_deref()
-        .and_then(|ast| selected_overload_docstring(transaction, handle, ast, position))
-        .and_then(nonempty_docstring)
-        .or_else(|| interface_docstring.and_then(nonempty_docstring))
-        .or_else(|| fallback_docstring.and_then(nonempty_docstring))
-        .or_else(|| docstring_for_class_object_type(transaction, handle, &type_));
+        .and_then(|ast| selected_overload_func_def(transaction, handle, ast, position));
+    let docstring = if let Some(func_id) = selected_overload {
+        docstring_for_func_def(transaction, handle, &func_id)
+            .and_then(nonempty_docstring)
+            .or_else(|| {
+                ast.as_deref()
+                    .and_then(|ast| {
+                        overload_implementation_docstring(transaction, handle, ast, position)
+                    })
+                    .and_then(nonempty_docstring)
+            })
+    } else {
+        interface_docstring
+            .and_then(nonempty_docstring)
+            .or_else(|| fallback_docstring.and_then(nonempty_docstring))
+            .or_else(|| docstring_for_class_object_type(transaction, handle, &type_))
+    };
 
     let docstring = if hover_constructor_dunder {
         docstring.or_else(|| class_docstring_for_constructor(transaction, handle, position))

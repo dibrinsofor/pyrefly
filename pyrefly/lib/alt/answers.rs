@@ -92,6 +92,7 @@ use crate::types::class::ClassFields;
 use crate::types::env::TypeEnv;
 use crate::types::equality::TypeEq;
 use crate::types::equality::TypeEqCtx;
+use crate::types::function::FuncDefId;
 use crate::types::heap::TypeHeap;
 use crate::types::stdlib::Stdlib;
 use crate::types::types::Forall;
@@ -195,6 +196,7 @@ pub struct OverloadTrace {
     pub(crate) callable: Callable,
     tparams: Option<Arc<TParams>>,
     pub(crate) receiver: TraceReceiver,
+    func_def_id: Option<Arc<FuncDefId>>,
 }
 
 impl OverloadTrace {
@@ -202,11 +204,13 @@ impl OverloadTrace {
         callable: Callable,
         tparams: Option<Arc<TParams>>,
         receiver: TraceReceiver,
+        func_def_id: Option<Arc<FuncDefId>>,
     ) -> Self {
         Self {
             callable,
             tparams,
             receiver,
+            func_def_id,
         }
     }
 
@@ -2020,6 +2024,19 @@ impl Answers {
         lock.overloaded_callees.get(&range)?.chosen_type()
     }
 
+    /// The source definition chosen for a successfully resolved overload call.
+    pub fn get_chosen_overload_func_def_id(&self, range: TextRange) -> Option<Arc<FuncDefId>> {
+        let lock = self.trace.as_ref()?.lock();
+        match lock.overloaded_callees.get(&range)? {
+            OverloadedCallee::Candidates {
+                closest,
+                is_closest_chosen: true,
+                ..
+            } => closest.func_def_id.clone(),
+            _ => None,
+        }
+    }
+
     /// Returns all the overload, and the index of a chosen one
     pub fn get_all_overload_trace(
         &self,
@@ -2063,7 +2080,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             self.trace_state().record_resolved_trace(
                 loc,
                 OverloadedCallee::Resolved {
-                    callable: OverloadTrace::new(callable, None, receiver),
+                    callable: OverloadTrace::new(callable, None, receiver, None),
                 },
             );
         }
