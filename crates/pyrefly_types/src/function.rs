@@ -554,6 +554,16 @@ impl FunctionKind {
         }
     }
 
+    /// Return the source definition Arc carried by this function kind, if any.
+    pub fn func_def_id_arc(&self) -> Option<Arc<FuncDefId>> {
+        match self {
+            Self::Def(id) | Self::SqlAlchemyMappedColumn(id) | Self::TypeShapeDsl(id, ..) => {
+                Some(id.clone())
+            }
+            _ => None,
+        }
+    }
+
     pub fn from_definition(id: Arc<FuncDefId>) -> Self {
         let qname = &id.qname;
         if !qname.parent().is_toplevel() {
