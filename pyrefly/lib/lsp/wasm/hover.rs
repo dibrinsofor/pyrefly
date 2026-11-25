@@ -1487,7 +1487,8 @@ fn docstring_for_func_def(
         func_id.qname.module_name(),
         func_id.qname.module_path().dupe(),
     );
-    let ast = transaction.get_ast(&definition_handle)?;
+    let module = transaction.get_module_info(&definition_handle)?;
+    let ast = transaction.get_ast_or_parse_module(handle, &module);
     let function = Ast::locate_node(ast.as_ref(), func_id.qname.range().start())
         .into_iter()
         .find_map(|node| match node {
@@ -1499,10 +1500,7 @@ fn docstring_for_func_def(
             _ => None,
         })?;
     let range = function_doc_ranges(function).docstring()?;
-    Some(Docstring(
-        range,
-        transaction.get_module_info(&definition_handle)?,
-    ))
+    Some(Docstring(range, module))
 }
 
 /// Find the source definition selected by the overload call under the cursor.
